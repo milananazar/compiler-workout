@@ -32,13 +32,13 @@ module Expr =
     (* Update: non-destructively "modifies" the state s by binding the variable x 
       to value v and returns the new state.
     *)
-    let update x v s = fun y -> if x = y then v else s y
+    	let update x v s = fun y -> if x = y then v else s y
 
-    let bool_to_int b = if b then 1 else 0;;
+    	let bool_to_int b = if b then 1 else 0;;
 
-let int_to_bool i = i != 0;;
+	let int_to_bool i = i != 0;;
 
-let get_operator operator = match operator with
+	let get_operator operator = match operator with
 	| "+" -> ( + )
 	| "-" -> ( - )
 	| "*" -> ( * )
@@ -53,13 +53,13 @@ let get_operator operator = match operator with
 	| "&&" -> fun left_expression right_expression -> bool_to_int ( ( && ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) )
 	| "!!" -> fun left_expression right_expression -> bool_to_int ( ( || ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) );;
 
-let rec eval state expression = match expression with
+	let rec eval state expression = match expression with
 	| Const const -> const
 	| Var var -> state var
 	| Binop (operator, left_expression, right_expression) -> get_operator operator (eval state left_expression) (eval state right_expression);;
               
 
-  end
+  	end
                     
 (* Simple statements: syntax and sematics *)
 module Stmt =
@@ -81,8 +81,13 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
-                                                         
+  let rec eval config statement = match (config, statement) with
+      | ((state, value::inp, out), Read name) -> (Expr.update name value state, inp, out)
+      | ((state, inp, out), Write expr) -> (state, inp, out @ [(Expr.eval state expr)])
+      | ((state, inp, out), Assign (name, expr)) -> ((Expr.update name (Expr.eval state expr) state), inp, out)
+      | (config, Seq (s1, s2)) -> eval (eval config s1) s2
+      | _ -> failwith "Unknown operation"
+                                                                                                                 
   end
 
 (* The top-level definitions *)
