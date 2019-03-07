@@ -34,40 +34,32 @@ let eval_insn config insn =
 	| ST  variable_name -> (match stack with
 		| head::tail -> (tail, (Language.Expr.update variable_name head state, input, output)))
 
-
 (* Stack machine interpreter
-
      val eval : config -> prg -> config
-
    Takes a configuration and a program, and returns a configuration as a result
  *)                         
 let eval config prg = List.fold_left eval_insn config prg
 
 (* Top-level evaluation
-
      val run : prg -> int list -> int list
-
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in o
 
 (* Stack machine compiler
-
      val compile : Language.Stmt.t -> prg
-
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
 let rec compile_expr expr = 
 	match expr with
-	| Language.Expr.Const const -> [CONST const]
+		| Language.Expr.Const const -> [CONST const]
         | Language.Expr.Var var -> [LD var]
         | Language.Expr.Binop (operator, left_expression, right_expression) -> (compile_expr left_expression)@(compile_expr right_expression)@[BINOP operator];;
 
 let rec compile statement = 
 	match statement with
-	| Language.Stmt.Read variable_name -> [READ; ST variable_name]
-	| Language.Stmt.Write expression -> (compile_expr expression)@[WRITE]
-	| Language.Stmt.Assign (variable_name, expression) -> (compile_expr expression)@[ST variable_name]
-	| Language.Stmt.Seq (statement1, statement2) -> (compile statement1)@(compile statement2);;
-
+		| Language.Stmt.Read variable_name -> [READ; ST variable_name]
+		| Language.Stmt.Write expression -> (compile_expr expression)@[WRITE]
+		| Language.Stmt.Assign (variable_name, expression) -> (compile_expr expression)@[ST variable_name]
+		| Language.Stmt.Seq (statement1, statement2) -> (compile statement1)@(compile statement2);;
