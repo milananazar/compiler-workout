@@ -44,7 +44,30 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+   let bool_to_int b = if b then 1 else 0 
+	let int_to_bool i = i != 0 
+
+	let operator op left right = match op with
+	  | "+"  -> left + right
+	  | "-"  -> left - right
+	  | "*"  -> left * right
+	  | "/"  -> left / right
+	  | "%"  -> left mod right
+	  | "==" -> bool_to_int (left = right)
+	  | "!=" -> bool_to_int (left != right)
+	  | "<=" -> bool_to_int (left <= right)
+	  | "<"  -> bool_to_int (left < right)
+	  | ">=" -> bool_to_int (left >= right)
+	  | ">"  -> bool_to_int (left > right)
+	  | "&&" -> bool_to_int (int_to_bool left && int_to_bool right)
+	  | "!!" -> bool_to_int (int_to_bool left || int_to_bool right)
+	  
+	let rec eval st exp = match exp with
+	  | Const v -> v
+	  | Var x -> st x
+	  | Binop (op, left, right) -> operator op (eval st left) (eval st right) 
+
+	let prsBinOp op = ostap(- $(op)), (fun x y -> Binop (op, x, y))
 
     (* Expression parser. You can use the following terminals:
 
@@ -52,8 +75,22 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
-    ostap (
-      parse: empty {failwith "Not implemented yet"}
+ ostap (
+       expr:
+      	    !(Ostap.Util.expr
+      		    (fun x -> x)
+      		    (Array.map (fun (asc, ops) -> asc, List.map prsBinOp ops)
+                    [|
+                        `Lefta, ["!!"];
+                        `Lefta, ["&&"];
+                        `Nona , ["<="; "<"; ">="; ">"; "=="; "!="];
+                        `Lefta, ["+"; "-"];
+                        `Lefta, ["*"; "/"; "%"];
+                    |]
+                )
+      		    primary
+      		);
+      	primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" expr -")"
     )
 
   end
@@ -78,11 +115,24 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval config statement = 
+	let (state, input, output) = config in
+	match statement with
+		| Read variable_name -> (match input with
+		| head::tail -> (Expr.update variable_name head state, tail, output))
+		| Write expression -> (state, input, output @ [Expr.eval state expression])
+		| Assign (variable_name, expression) -> (Expr.update variable_name (Expr.eval state expression) state, input, output)
+		| Seq (statement1, statement2) -> eval (eval config statement1) statement2;;
+
 
     (* Statement parser *)
-    ostap (
-      parse: empty {failwith "Not implemented yet"}
+ostap (
+		stmt:
+			x:IDENT ":=" e:!(Expr.expr) {Assign(x, e)}
+		| "read" "(" x:IDENT ")" {Read x}
+		| "write" "(" e:!(Expr.expr) ")" {Write e};
+			
+		parse: s:stmt ";" rest:parse {Seq(s, rest)} | stmt	
     )
       
   end
