@@ -38,59 +38,54 @@ module Expr =
     let update x v s = fun y -> if x = y then v else s y
 
     (* Expression evaluator
-
           val eval : state -> t -> int
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-   let bool_to_int b = if b then 1 else 0 
-	let int_to_bool i = i != 0 
+	
+	let bool_to_int b = if b then 1 else 0;;
+	let int_to_bool i = i != 0;;
 
-	let operator op left right = match op with
-	  | "+"  -> left + right
-	  | "-"  -> left - right
-	  | "*"  -> left * right
-	  | "/"  -> left / right
-	  | "%"  -> left mod right
-	  | "==" -> bool_to_int (left = right)
-	  | "!=" -> bool_to_int (left != right)
-	  | "<=" -> bool_to_int (left <= right)
-	  | "<"  -> bool_to_int (left < right)
-	  | ">=" -> bool_to_int (left >= right)
-	  | ">"  -> bool_to_int (left > right)
-	  | "&&" -> bool_to_int (int_to_bool left && int_to_bool right)
-	  | "!!" -> bool_to_int (int_to_bool left || int_to_bool right)
-	  
-	let rec eval st exp = match exp with
-	  | Const v -> v
-	  | Var x -> st x
-	  | Binop (op, left, right) -> operator op (eval st left) (eval st right) 
-
-	let prsBinOp op = ostap(- $(op)), (fun x y -> Binop (op, x, y))
-
+	let get_operator operator = match operator with
+		| "+" -> ( + )
+		| "-" -> ( - )
+		| "*" -> ( * )
+		| "/" -> ( / )
+		| "%" -> ( mod )
+		| "<" -> fun left_expression right_expression -> bool_to_int ( ( < ) left_expression right_expression )
+		| "<=" -> fun left_expression right_expression -> bool_to_int ( ( <= ) left_expression right_expression )
+		| ">"  -> fun left_expression right_expression -> bool_to_int ( ( > ) left_expression right_expression )
+		| ">=" -> fun left_expression right_expression -> bool_to_int ( ( >= ) left_expression right_expression )
+		| "==" -> fun left_expression right_expression -> bool_to_int ( ( == ) left_expression right_expression )
+		| "!=" -> fun left_expression right_expression -> bool_to_int ( ( != ) left_expression right_expression )
+		| "&&" -> fun left_expression right_expression -> bool_to_int ( ( && ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) )
+		| "!!" -> fun left_expression right_expression -> bool_to_int ( ( || ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) );;
+		
+	let rec eval state expression = match expression with
+		| Const const -> const
+		| Var var -> state var
+		| Binop (operator, left_expression, right_expression) -> get_operator operator (eval state left_expression) (eval state right_expression);;
+	
     (* Expression parser. You can use the following terminals:
-
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
- ostap (
-       expr:
-      	    !(Ostap.Util.expr
-      		    (fun x -> x)
-      		    (Array.map (fun (asc, ops) -> asc, List.map prsBinOp ops)
-                    [|
-                        `Lefta, ["!!"];
-                        `Lefta, ["&&"];
-                        `Nona , ["<="; "<"; ">="; ">"; "=="; "!="];
-                        `Lefta, ["+"; "-"];
-                        `Lefta, ["*"; "/"; "%"];
-                    |]
-                )
-      		    primary
-      		);
-      	primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" expr -")"
+    ostap (
+		expr:
+			!(Ostap.Util.expr
+				(fun x -> x)
+				[|
+					`Lefta, [ostap ("!!"), fun x y -> Binop ("!!", x, y)];
+					`Lefta, [ostap ("&&"), fun x y -> Binop ("&&", x, y)];
+					`Nona, [ostap ("<="), (fun x y -> Binop ("<=", x, y)); ostap ("<"), (fun x y -> Binop ("<", x, y)); ostap (">="), (fun x y -> Binop (">=", x, y)); ostap (">"), (fun x y -> Binop (">", x, y)); ostap ("=="), (fun x y -> Binop ("==", x, y)); ostap ("!="), (fun x y -> Binop ("!=", x, y))];
+					`Lefta, [ostap ("+"), (fun x y -> Binop ("+", x, y)); ostap ("-"), (fun x y -> Binop ("-", x, y))];
+					`Lefta, [ostap ("*"), (fun x y -> Binop ("*", x, y)); ostap ("/"), (fun x y -> Binop ("/", x, y)); ostap ("%"), (fun x y -> Binop ("%", x, y))];
+				|]
+				primary
+			);
+		primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" expr -")"
     )
 
   end
@@ -110,27 +105,25 @@ module Stmt =
     type config = Expr.state * int list * int list 
 
     (* Statement evaluator
-
           val eval : config -> t -> config
-
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval config statement = 
+
+	let rec eval config statement = 
 	let (state, input, output) = config in
 	match statement with
 		| Read variable_name -> (match input with
-		| head::tail -> (Expr.update variable_name head state, tail, output))
+			| head::tail -> (Expr.update variable_name head state, tail, output))
 		| Write expression -> (state, input, output @ [Expr.eval state expression])
 		| Assign (variable_name, expression) -> (Expr.update variable_name (Expr.eval state expression) state, input, output)
 		| Seq (statement1, statement2) -> eval (eval config statement1) statement2;;
 
-
     (* Statement parser *)
-ostap (
+    ostap (
 		stmt:
 			x:IDENT ":=" e:!(Expr.expr) {Assign(x, e)}
-		| "read" "(" x:IDENT ")" {Read x}
-		| "write" "(" e:!(Expr.expr) ")" {Write e};
+			| "read" "(" x:IDENT ")" {Read x}
+			| "write" "(" e:!(Expr.expr) ")" {Write e};
 			
 		parse: s:stmt ";" rest:parse {Seq(s, rest)} | stmt	
     )
@@ -143,9 +136,7 @@ ostap (
 type t = Stmt.t    
 
 (* Top-level evaluator
-
      eval : t -> int list -> int list
-
    Takes a program and its input stream, and returns the output stream
 *)
 let eval p i =
