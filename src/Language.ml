@@ -5,6 +5,11 @@ open GT
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
+open Ostap
+
+let to_list = function
+  | None -> []
+  | Some results -> results
 
 (* States *)
 module State =
@@ -29,10 +34,10 @@ module State =
     let eval s x = (if List.mem x s.scope then s.l else s.g) x
 
     (* Creates a new scope, based on a given state *)
-    let push_scope st xs = {empty with g = st.g; scope = xs}
+    let push_scope st xs = {empty with g = st.g; scope = xs} (* enter *)
 
     (* Drops a scope *)
-    let drop_scope st st' = {st' with g = st.g}
+    let drop_scope st st' = {st' with g = st.g} (* leave *)
 
   end
     
@@ -144,61 +149,72 @@ module Stmt =
            method definition : string -> (string list, string list, t)
        which returns a list of formal parameters and a body for given definition
     *)
-    let rec eval cnf stmt =
-      let (st, i, o) = cnf in
-      match stmt with
-      | Read x ->
-        begin
-          match i with
-          | z :: tail -> (Expr.update x z st, tail, o)
-          | _ -> failwith "cannot perform Read"
-        end
-      | Write e -> (st, i, o @ [Expr.eval st e])
-      | Assign (x, e) -> (Expr.update x (Expr.eval st e) st, i, o)
-      | Seq (e1, e2) -> eval (eval cnf e1) e2
-      | Skip -> cnf
-      | If (e1, e2, e3) -> eval cnf (if Expr.eval st e1 != 0 then e2 else e3)
-      | While (e1, e2) ->
-        if Expr.eval st e1 != 0 then eval (eval cnf e2) stmt else cnf
-      | RepeatUntil (e1, e2) ->
-        let ((st', _, _) as cnf') = eval cnf e2 in
-        if Expr.eval st' e = 0 then eval cnf' stmt else cnf'
-      | Call (name, args) ->
-            let (arg_names, locals, body) = env#definition name in
-            let args = List.combine arg_names (List.map (Expr.eval st) args) in
-            let state = State.push_scope st (arg_names @ locals) in
-            let fun_env_w_args = List.fold_left (fun st (name, value) -> State.update name value st) state args in
-            let (new_s, input, output) = eval env (fun_env_w_args,input, output) body in
-            (State.drop_scope new_s st, input, output)
-
-
+    let rec eval env (state, input, output as config) program =
+      let eval_expr expr = Expr.eval state expr in
+      let set_var var value = State.update var value state in
+      match program with
+      | Read (var) ->
+         (match input with
+          | value::inp_rest -> (set_var var value, inp_rest, output)
+          | _ -> failwith "Input stream is empty")
+      | Write (expr) -> (state, input, output@[eval_expr expr])
+      | Assign (var, expr) -> (set_var var (eval_expr expr), input, output)
+      | Seq (prog1, prog2) -> eval env (eval env config prog1) prog2
+      | Skip -> config
+      | If (cond, positive, negative) -> if (eval_expr cond) != 0
+                                         then eval env config positive
+                                         else eval env config negative
+      | (While (cond, body) as loop) -> if (eval_expr cond) != 0
+                                        then eval env config (Seq (body, loop))
+                                        else config
+      | (Repeat (body, cond) as loop) ->
+         let (state', input', output' as config') = eval env config body in
+         if (Expr.eval state' cond) == 0
+         then eval env config' loop
+         else config'
+      | Call (name, args_exprs) ->
+         let args_values = List.map eval_expr args_exprs in
+         let (args, locals, body) = env#definition name in
+         let state_pre = State.push_scope state (args @ locals) in
+         let set_var st var value = State.update var value st in
+         let state_before = List.fold_left2 set_var state_pre args args_values in
+         let (state', input', output') = eval env (state_before, input, output) body in
+         let state_after = State.drop_scope state' state in
+         (state_after, input', output')
+                       
     (* Statement parser *)
-    ostap (
-      line:
-          "read" "(" x:IDENT ")"         {Read x}
-        | "write" "(" e:!(Expr.parse) ")" {Write e}
-        | x:IDENT ":=" e:!(Expr.parse)    {Assign (x, e)}
-        | "if" e1:!(Expr.parse) "then" e2:parse "else" e3:parse "fi" {If (e1, e2, e3)}
-        | "if" e1:!(Expr.parse) "then" e2:parse "fi" {If (e1, e2, Skip)}
-        | "if" e1:!(Expr.parse) "then" e2:parse e3:elif {If (e1, e2, e3)}
-        | "skip" {Skip}
-        | "while" e1:!(Expr.parse) "do" e2:parse "od" {While (e1, e2)}
-        | "repeat" e1:parse "until" e2:!(Expr.parse) {RepeatUntil  (e1, e2)}
-        | "for" e1:parse "," e2:!(Expr.parse) "," e3:parse "do" s:parse "od" {Seq (e1, While (e2, Seq(s, e3)))}
-        | name:IDENT "(" args:(!(Expr.parse))* ")" {Call (name, args)};
-      
-      parse:
-          l:line ";" rest:parse {Seq (l, rest)} | line;
+    let rec build_ite_tree (cond, positive as if_branch) elif_branches else_branch_opt =
+      match elif_branches, else_branch_opt with
+      | elif::rest, _ ->
+         let subtree = build_ite_tree elif rest else_branch_opt in
+         If (cond, positive, subtree)
+      | [], None -> If (cond, positive, Skip)
+      | [], Some else_cmd -> If (cond, positive, else_cmd)
 
-      elif:
-          "elif" e1:!(Expr.parse) "then" e2:parse "else" e3:parse "fi" {If (e1, e2, e3)}
-        | "elif" e1:!(Expr.parse) "then" e2:parse "fi" {If (e1, e2, Skip)}
-        | "elif" e1:!(Expr.parse) "then" e2:parse e3:elif {If (e1, e2, e3)}
-    )
-      
+    ostap (	  
+      base: !(Expr.parse);
+
+      assign: v:IDENT ":=" e:base {Assign (v, e)};
+      read: "read" "(" v:IDENT ")" {Read v};
+      write: "write" "(" e:base ")" {Write e};
+      skip: "skip" {Skip};
+      args_list: arg:base "," rest:args_list {arg::rest} | arg:base {[arg]};
+      call: name:IDENT "(" args:(args_list?) ")" {Call (name, to_list args)};
+      single: assign | read | write | skip | call;
+
+      if_then_branch: "if" cond:base "then" positive:parse {(cond, positive)};
+      elif_branch: "elif" cond:base "then" positive:parse {(cond, positive)};
+      else_branch: "else" negative:parse {negative};
+      ite: itb:if_then_branch elifbs:(elif_branch*) ebopt:(else_branch?) "fi" {build_ite_tree itb elifbs ebopt};
+      while_loop: "while" cond:base "do" body:parse "od" {While (cond, body)};
+      repeat_loop: "repeat" body:parse "until" cond:base {Repeat (body, cond)};
+      for_loop: "for" init:parse "," cond:base "," update:parse "do" body:parse "od" {Seq (init, While (cond, Seq (body, update)))};
+      grouped: ite | while_loop | repeat_loop | for_loop;
+      seq: cmd1:(single | grouped)  ";" cmd2:parse {Seq (cmd1, cmd2)};
+
+      parse: seq | grouped | single
+    )      
   end
-      
-
 
 (* Function and procedure definitions *)
 module Definition =
@@ -208,14 +224,11 @@ module Definition =
     type t = string * (string list * string list * Stmt.t)
 
     ostap (                                      
-       parse: "fun" name:IDENT "(" args:(IDENT)* ")" local:(%"local" (IDENT)*)? "{" body:!(Stmt.parse) "}"
-        {
-            let local = match local with
-            | Some x -> x
-            | _ -> [] in
-            name, (args, local, body)
-        }
+      args_list: arg:IDENT "," rest:args_list {arg::rest} | arg:IDENT {[arg]};
+      def: "fun" name:IDENT "(" args:args_list? ")" locals:(-"local" lst:args_list)? "{" body:!(Stmt.parse) "}" {name, (to_list args, to_list locals, body)};
+      parse: def
     )
+
   end
     
 (* The top-level definitions *)
